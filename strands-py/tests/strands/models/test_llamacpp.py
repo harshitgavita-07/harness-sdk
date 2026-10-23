@@ -1124,3 +1124,46 @@ def test_format_request_logs_skipped_blocks_once_per_request(caplog):
     messages_logged = [record.getMessage() for record in caplog.records]
     assert len(messages_logged) == 1
     assert "count=<3> | Location sources are not supported by llama.cpp" in messages_logged[0]
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_call_truncated_by_max_tokens_reports_max_tokens() -> None:
+    """finish_reason "length" wins over a partial tool call, so the stop reason is max_tokens (#5428)."""
+    model = LlamaCppModel()
+
+    mock_response_lines = [
+        'data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "write_file", "arguments": ""}}]}}]}',
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '{"path": "notes.md", "content": "Lorem ipsum dol'}}
+                            ]
+                        },
+                    }
+                ]
+            }
+        ),
+        'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "length"}]}',
+        "data: [DONE]",
+    ]
+
+    async def mock_aiter_lines():
+        for line in mock_response_lines:
+            yield line
+
+    mock_response = AsyncMock()
+    mock_response.aiter_lines = mock_aiter_lines
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(model.client, "post", return_value=mock_response):
+        chunks = []
+        async for chunk in model.stream([{"role": "user", "content": [{"text": "write a long file"}]}]):
+            chunks.append(chunk)
+
+    stop = next(chunk["messageStop"] for chunk in chunks if "messageStop" in chunk)
+    assert stop == {"stopReason": "max_tokens"}

@@ -763,8 +763,10 @@ class LlamaCppModel(Model):
 
                 yield self._format_chunk({"chunk_type": "content_stop"})
 
-            # Send stop reason
-            if finish_reason == "tool_calls" or tool_calls:
+            # Send stop reason; a truncation (finish_reason "length") wins over a partial tool call
+            if finish_reason == "length":
+                stop_reason = "length"
+            elif finish_reason == "tool_calls" or tool_calls:
                 stop_reason = "tool_calls"  # Changed from "tool_use" to match format_chunk expectations
             else:
                 stop_reason = finish_reason or "end_turn"
